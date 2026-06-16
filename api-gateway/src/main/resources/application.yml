@@ -1,0 +1,205 @@
+spring:
+  application:
+    name: api-gateway
+
+  cloud:
+    gateway:
+      routes:
+        ## ProductService Route
+        ## id can be anything but it should be unique between all ids of gateway-routes
+        ## uri must have to match with URL in serviceDiscovery or original URL
+        - id: product-service
+          uri: lb://PRODUCT-SERVICE
+          predicates:
+            - Path=/api/product/**
+          filters:
+            - AuthFilter
+            - name: CircuitBreaker
+              args:
+                name: PRODUCT-SERVICE
+                fallbackUri: forward:/fallback/product    # → productFallback()
+                # Tell circuit breaker to also trigger fallback on these status codes
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### OrderService Route
+        - id: order-service
+          uri: lb://ORDER-SERVICE
+          predicates:
+            - Path=/api/order/**
+          filters:
+            - AuthFilter
+            - name: CircuitBreaker
+              args:
+                name: ORDER-SERVICE
+                fallbackUri: forward:/fallback/order      # → orderFallback()
+                # Tell circuit breaker to also trigger fallback on these status codes
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### inventory Route
+        - id: inventory-service
+          uri: lb://INVENTORY-SERVICE
+          predicates:
+            - Path=/api/inventory/**
+          filters:
+            - AuthFilter
+            - name: CircuitBreaker
+              args:
+                name: INVENTORY-SERVICE
+                fallbackUri: forward:/fallback/inventory  # → inventoryFallback()
+                # Tell circuit breaker to also trigger fallback on these status codes
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### AuthService Route
+        - id: auth-service
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: AUTH-SERVICE
+                fallbackUri: forward:/fallback/auth       # → authFallback()
+                # Tell circuit breaker to also trigger fallback on these status codes
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### AuthService User Profile Route (protected — requires JWT)   # ← ADD FROM HERE
+        - id: auth-service-user
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/api/user/**
+          filters:
+            - AuthFilter
+            - name: CircuitBreaker
+              args:
+                name: AUTH-SERVICE
+                fallbackUri: forward:/fallback/auth
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### CartService Route
+        - id: cart-service
+          uri: lb://CART-SERVICE
+          predicates:
+            - Path=/api/cart/**
+          filters:
+            - AuthFilter
+            - name: CircuitBreaker
+              args:
+                name: CART-SERVICE
+                fallbackUri: forward:/fallback/cart
+                statusCodes:
+                  - 500
+                  - 502
+                  - 503
+                  - 504
+        ### Discovery Server Route
+        - id: discovery-server
+          uri: http://localhost:8761
+          predicates:
+            - Path=/eureka/web
+          filters:
+            - SetPath=/
+        ### Discovery Server Static Resources Route
+        - id: discovery-server-static
+          uri: http://localhost:8761
+          predicates:
+            - Path=/eureka/**
+
+#Service Discovery properties
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka
+
+#Cricuit Breaker properties
+resilience4j:
+  timelimiter:
+    configs:
+      default:
+        timeoutDuration: 300s     # dev: increase to 300s if you want to debug without timeouts
+    instances:
+      PRODUCT-SERVICE:
+        baseConfig: default
+      ORDER-SERVICE:
+        baseConfig: default
+      INVENTORY-SERVICE:
+        baseConfig: default
+      AUTH-SERVICE:
+        baseConfig: default
+      CART-SERVICE:
+        baseConfig: default
+  circuitbreaker:
+    configs:
+      default:
+        # Trigger fallback on these exception types too
+        recordExceptions:
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+          - reactor.core.Exceptions$ReactiveException
+        registerHealthIndicator: true
+        eventConsumerBufferSize: 10
+        slidingWindowSize: 5
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 300s
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowType: COUNT_BASED
+    instances:
+      PRODUCT-SERVICE:
+        baseConfig: default
+      ORDER-SERVICE:
+        baseConfig: default
+      INVENTORY-SERVICE:
+        baseConfig: default
+      AUTH-SERVICE:
+        baseConfig: default
+      CART-SERVICE:
+        baseConfig: default
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers
+  health:
+    circuitbreakers:
+      enabled: true
+  endpoint:
+    health:
+      show-details: always
+
+server:
+  port: 8088
+
+logging:
+  level:
+    root: INFO
+    # Your own code — keep DEBUG so you can see your logs
+    com.hpethani: DEBUG
+    # Silence noisy Spring Cloud Gateway internals (route matching, filter chains)
+    org.springframework.cloud.gateway: WARN
+    # Silence load balancer logs
+    org.springframework.cloud.loadbalancer: WARN
+    # something
+    org.springframework.cloud.gateway.route.RouteDefinitionLocator: INFO
+    # Silence Netty connection-level logs
+    reactor.netty: WARN
+
+jwt:
+  secret: mysecretkey123456mysecretkey123456mysecretkey123456mysecretkey123456
+  expiration-seconds: 3600
