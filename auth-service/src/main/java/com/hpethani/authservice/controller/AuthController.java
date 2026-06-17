@@ -1,6 +1,5 @@
 package com.hpethani.authservice.controller;
 
-import com.hpethani.authservice.dto.JwtTokenResponse;
 import com.hpethani.authservice.dto.LoginRequest;
 import com.hpethani.authservice.dto.LoginResponse;
 import com.hpethani.authservice.dto.RegisterRequest;
@@ -53,18 +52,12 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<LoginResponse> refresh(
-            @CookieValue("refresh_token") String refreshToken,
-            HttpServletResponse response
-    ) {
+    public ResponseEntity<LoginResponse> refresh(@CookieValue("refresh_token") String refreshToken, HttpServletResponse response) {
         return ResponseEntity.ok(service.refresh(refreshToken, response));
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<Void> logout(
-            @CookieValue("refresh_token") String refreshToken,
-            HttpServletResponse response
-    ) {
+    public ResponseEntity<Void> logout(@CookieValue("refresh_token") String refreshToken, HttpServletResponse response) {
         service.logout(refreshToken, response);
         return ResponseEntity.ok().build();
     }

@@ -27,8 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collection;
-import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -117,39 +115,33 @@ public class AuthService {
 
     @Transactional
     public LoginResponse refresh(String rawRefreshToken, HttpServletResponse response) {
-
+        // Generate hashed token of current token.
         String hash = refreshTokenService.generateHashedToken(rawRefreshToken);
-
+        // Check if it is existed ?
         RefreshToken token = refreshTokenRepository.findByTokenHash(hash)
                                 .orElseThrow(
                                         () -> new UnauthorizedException("Invalid token")
                                 );
-
+        // Check if it is revoked ?
         if (token.isRevoked()) {
             throw new UnauthorizedException("Token revoked");
         }
-
+        // Check if it is expired ?
         if (token.getExpiresAt().isBefore(Instant.now())) {
             throw new UnauthorizedException("Expired token");
         }
-
+        // Now set it as revoked and save to DB. As we will store new refresh Token.
         token.setRevoked(true);
-
         refreshTokenRepository.save(token);
 
         Long userId = token.getUserId();
+        User user = userRepository.findById(userId).orElseThrow();
 
-        User user = userRepository.findById(userId)
-                .orElseThrow();
-
-        String newAccessToken =
-                jwtService.generateToken(
-                        userDetailsMapper(user),
-                        userId
-                );
-
+        // Generate new JWT token as well as refresh token.
+        String newAccessToken = jwtService.generateToken(userDetailsMapper(user), userId);
         String newRefreshToken = refreshTokenService.generateRefreshToken(userId);
 
+        // Set refreshToken in response cookie. This will overwrite the old refresh token cookie.
         addRefreshCookie(response, newRefreshToken);
 
         return LoginResponse.builder()
@@ -160,15 +152,15 @@ public class AuthService {
 
     @Transactional
     public void logout(String rawToken, HttpServletResponse response) {
-
+        // Generate hashed token of current token.
         String hash = refreshTokenService.generateHashedToken(rawToken);
-
+        // Check if it is existed ? If exists, set revoked = true and save to DB. This will prevent any future use of this token.
         refreshTokenRepository.findByTokenHash(hash)
                                 .ifPresent(token -> {
                                     token.setRevoked(true);
                                     refreshTokenRepository.save(token);
                                 });
-
+        // clear the existing refreshToken from cookie.
         clearCookie(response);
     }
 
@@ -188,6 +180,11 @@ public class AuthService {
     }
 
     private void addRefreshCookie(HttpServletResponse response, String refreshToken) {
+        // ResponseCookie.from("refresh_token", refreshToken) => key = refresh_token, value = tokenValue
+        // .httpOnly(true) => JavaScript cannot access this cookie by document.cookie (prevents XSS attacks)
+        // .secure(true) => cookie is sent only over HTTPS (prevents MITM attacks) (for locally we have to set it false)
+        // .sameSite("Strict") => Cookie sent only when navigating within the same site.
+        // .path("/auth") => Cookie is only sent for URLs beginning with:
         ResponseCookie cookie = ResponseCookie.from("refresh_token", refreshToken)
                                     .httpOnly(true)
                                     .secure(true)
