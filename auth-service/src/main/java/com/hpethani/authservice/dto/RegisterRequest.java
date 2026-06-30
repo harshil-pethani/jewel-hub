@@ -20,7 +20,7 @@ public class RegisterRequest {
     private String email;
 
     @NotBlank(message = "Password is required")
-    @Size(min = 6, message = "Password must be at least 6 characters")
+    @Size(min = 6, max = 20, message = "Password must be at least 6 characters")
     private String password;
 
     @Pattern(regexp = "^[6-9]\\d{9}$", message = "Invalid Indian phone number")

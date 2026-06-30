@@ -1,20 +1,19 @@
 package com.hpethani.authservice.entity;
 
 import jakarta.persistence.*;
-import jakarta.ws.rs.DefaultValue;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.Instant;
 
 @Entity
+@Table(name = "password_reset_tokens")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Table(name = "refresh_tokens")
-public class RefreshToken {
+public class PasswordResetToken {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -30,7 +29,9 @@ public class RefreshToken {
     private Instant expiresAt;
 
     @Builder.Default
-    private boolean revoked = false;
+    private boolean used = false;
+
+    private Instant usedAt;
 
     @CreationTimestamp
     @Column(updatable = false)

@@ -3,10 +3,8 @@ package com.hpethani.authservice.service;
 import com.hpethani.authservice.dto.LoginRequest;
 import com.hpethani.authservice.dto.LoginResponse;
 import com.hpethani.authservice.dto.RegisterRequest;
-import com.hpethani.authservice.entity.CustomUserDetails;
-import com.hpethani.authservice.entity.RefreshToken;
-import com.hpethani.authservice.entity.Role;
-import com.hpethani.authservice.entity.User;
+import com.hpethani.authservice.entity.*;
+import com.hpethani.authservice.repository.PasswordResetTokenRepository;
 import com.hpethani.authservice.repository.RefreshTokenRepository;
 import com.hpethani.authservice.repository.UserRepository;
 import com.hpethani.authservice.security.JwtService;
@@ -14,6 +12,8 @@ import com.hpethani.commonconfig.exception.BadRequestException;
 import com.hpethani.commonconfig.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -27,17 +27,25 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class AuthService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final CommonUtilityService commonUtilityService;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
     private final AuthenticationManager authenticationManager;
+
+    @Value("${jwt.expiration-seconds}")
+    private long expirationSeconds;
 
     public String register(RegisterRequest request) {
         if (userRepository.findByEmail(request.getEmail()).isPresent()) {
@@ -113,10 +121,10 @@ public class AuthService {
         }
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = UnauthorizedException.class)
     public LoginResponse refresh(String rawRefreshToken, HttpServletResponse response) {
         // Generate hashed token of current token.
-        String hash = refreshTokenService.generateHashedToken(rawRefreshToken);
+        String hash = commonUtilityService.generateHashedToken(rawRefreshToken);
         // Check if it is existed ?
         RefreshToken token = refreshTokenRepository.findByTokenHash(hash)
                                 .orElseThrow(
@@ -124,10 +132,15 @@ public class AuthService {
                                 );
         // Check if it is revoked ?
         if (token.isRevoked()) {
-            throw new UnauthorizedException("Token revoked");
+            refreshTokenRepository.revokeAllByUserId(token.getUserId());
+            log.warn("Token is already revoked");
+            throw new UnauthorizedException("Token already revoked");
         }
         // Check if it is expired ?
         if (token.getExpiresAt().isBefore(Instant.now())) {
+            token.setRevoked(true);
+            refreshTokenRepository.save(token);
+            log.warn("Token is expired");
             throw new UnauthorizedException("Expired token");
         }
         // Now set it as revoked and save to DB. As we will store new refresh Token.
@@ -135,7 +148,17 @@ public class AuthService {
         refreshTokenRepository.save(token);
 
         Long userId = token.getUserId();
-        User user = userRepository.findById(userId).orElseThrow();
+        User user = userRepository.findById(userId)
+                .orElseThrow(
+                        () -> new UnauthorizedException("User not found")
+                );
+
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            refreshTokenRepository.revokeAllByUserId(userId);
+            throw new UnauthorizedException(
+                    "Account not active"
+            );
+        }
 
         // Generate new JWT token as well as refresh token.
         String newAccessToken = jwtService.generateToken(userDetailsMapper(user), userId);
@@ -146,14 +169,106 @@ public class AuthService {
 
         return LoginResponse.builder()
                 .accessToken(newAccessToken)
-                .expiresIn(900)
+                .expiresIn(expirationSeconds)
                 .build();
+    }
+
+    @Transactional
+    public void forgotPassword(String email) {
+
+        Optional<User> optionalUser = userRepository.findByEmail(email);
+
+        // prevent email enumeration
+        if (optionalUser.isEmpty()) {
+            log.warn("No user found with email {}", email);
+            return;
+        }
+
+        User user = optionalUser.get();
+
+        // Remove older resetRequests if exists. We will create a new one.
+        passwordResetTokenRepository.deleteByUserId(user.getId());
+
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            return;
+        }
+
+        // This rawToken will be passed in resetPassword URL. In DB we have to store it as hashed.
+        String rawToken = commonUtilityService.generateRawToken(32);
+
+        String tokenHash = commonUtilityService.generateHashedToken(rawToken);
+
+        PasswordResetToken resetToken = PasswordResetToken.builder()
+                                            .userId(user.getId())
+                                            .tokenHash(tokenHash)
+                                            .expiresAt(
+                                                    Instant.now().plus(15, ChronoUnit.MINUTES)
+                                            )
+                                            .build();
+
+        passwordResetTokenRepository.save(resetToken);
+
+        String resetUrl = "https://app.example.com/reset-password?token=" + rawToken;
+
+        // TODO Replace with Email Service
+        log.info("Password reset link : {}", resetUrl);
+//        emailClient.sendResetPasswordEmail(
+//                user.getEmail(),
+//                resetUrl
+//        );
+    }
+
+    @Transactional
+    public void resetPassword(String token, String newPassword) {
+
+        String tokenHash = commonUtilityService.generateHashedToken(token);
+
+        PasswordResetToken resetToken = passwordResetTokenRepository
+                                            .findByTokenHash(tokenHash)
+                                            .orElseThrow(
+                                                    () -> new BadCredentialsException(
+                                                            "Invalid Password reset URL"
+                                                    )
+                                            );
+
+        if (resetToken.isUsed()) {
+            throw new BadCredentialsException("Password reset request is already processed");
+        }
+
+        if (resetToken.getExpiresAt().isBefore(Instant.now())) {
+            throw new BadCredentialsException(
+                    "Password reset URL is expired. Please initiate forgot password process again."
+            );
+        }
+
+        User user = userRepository.findById(resetToken.getUserId())
+                                        .orElseThrow();
+
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            throw new BadRequestException(
+                    "Password reset not allowed for this account"
+            );
+        }
+
+        user.setPassword(passwordEncoder.encode(newPassword));
+
+        userRepository.save(user);
+
+        resetToken.setUsed(true);
+        resetToken.setUsedAt(Instant.now());
+
+        passwordResetTokenRepository.save(resetToken);
+
+        refreshTokenRepository.revokeAllByUserId(user.getId());
+
+        // Don't delete right now. cronJob will do.
+        // passwordResetTokenRepository.deleteByUserId(user.getId());
     }
 
     @Transactional
     public void logout(String rawToken, HttpServletResponse response) {
         // Generate hashed token of current token.
-        String hash = refreshTokenService.generateHashedToken(rawToken);
+        String hash = commonUtilityService.generateHashedToken(rawToken);
         // Check if it is existed ? If exists, set revoked = true and save to DB. This will prevent any future use of this token.
         refreshTokenRepository.findByTokenHash(hash)
                                 .ifPresent(token -> {

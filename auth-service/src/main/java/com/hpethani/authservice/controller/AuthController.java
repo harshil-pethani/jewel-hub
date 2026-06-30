@@ -1,8 +1,6 @@
 package com.hpethani.authservice.controller;
 
-import com.hpethani.authservice.dto.LoginRequest;
-import com.hpethani.authservice.dto.LoginResponse;
-import com.hpethani.authservice.dto.RegisterRequest;
+import com.hpethani.authservice.dto.*;
 import com.hpethani.authservice.service.AuthService;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -54,6 +52,26 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<LoginResponse> refresh(@CookieValue("refresh_token") String refreshToken, HttpServletResponse response) {
         return ResponseEntity.ok(service.refresh(refreshToken, response));
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<CommonMessageResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        service.forgotPassword(request.getEmail());
+        return ResponseEntity.ok(CommonMessageResponse.builder()
+                .message("If an account exists, a password reset email has been sent.")
+                .build()
+        );
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<CommonMessageResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+
+        service.resetPassword(request.getToken(), request.getNewPassword());
+
+        return ResponseEntity.ok(CommonMessageResponse.builder()
+                .message("Password reset successfully")
+                .build()
+        );
     }
 
     @PostMapping("/logout")

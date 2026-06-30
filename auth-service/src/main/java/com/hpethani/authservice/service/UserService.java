@@ -4,10 +4,12 @@ import com.hpethani.authservice.dto.*;
 import com.hpethani.authservice.entity.AccountStatus;
 import com.hpethani.authservice.entity.User;
 import com.hpethani.authservice.entity.UserAddress;
+import com.hpethani.authservice.repository.RefreshTokenRepository;
 import com.hpethani.authservice.repository.UserAddressRepository;
 import com.hpethani.authservice.repository.UserRepository;
 import com.hpethani.commonconfig.exception.BadRequestException;
 import com.hpethani.commonconfig.exception.ResourceNotFoundException;
+import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
@@ -18,19 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 @Service
+@RequiredArgsConstructor
 public class UserService {
 
     private final UserRepository userRepository;
     private final UserAddressRepository addressRepository;
     private final PasswordEncoder passwordEncoder;
-
-    public UserService(UserRepository userRepository,
-                       UserAddressRepository addressRepository,
-                       PasswordEncoder passwordEncoder) {
-        this.userRepository = userRepository;
-        this.addressRepository = addressRepository;
-        this.passwordEncoder = passwordEncoder;
-    }
+    private final RefreshTokenRepository refreshTokenRepository;
 
     // ─────────────────────────── PROFILE ────────────────────────────
 
@@ -43,7 +39,7 @@ public class UserService {
             key = "#userId"
     )
     public UserProfileResponse getProfile(String email, String userId) {
-        User user = findActiveUserByEmail(email);
+        User user = findActiveUserById(userId);
         return mapToProfileResponse(user);
     }
 
@@ -54,8 +50,9 @@ public class UserService {
             value = "profile",
             key = "#userId"
     )
+    @Transactional
     public UserProfileResponse updateProfile(String email, String userId, UpdateProfileRequest request) {
-        User user = findActiveUserByEmail(email);
+        User user = findActiveUserById(userId);
 
         user.setFirstName(request.getFirstName());
         user.setLastName(request.getLastName());
@@ -68,8 +65,9 @@ public class UserService {
      * Changes the user's password after verifying the current password.
      * Also validates that newPassword and confirmPassword match.
      */
-    public void changePassword(String email, ChangePasswordRequest request) {
-        User user = findActiveUserByEmail(email);
+    @Transactional
+    public void changePassword(String email, String userId, ChangePasswordRequest request) {
+        User user = findActiveUserById(userId);
 
         if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
             throw new BadRequestException("Current password is incorrect");
@@ -85,6 +83,8 @@ public class UserService {
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
+
+        refreshTokenRepository.revokeAllByUserId(user.getId());
     }
 
     /**
@@ -96,10 +96,12 @@ public class UserService {
             value = "profile",
             key = "#userId"
     )
+    @Transactional
     public void deactivateAccount(String email, String userId) {
-        User user = findActiveUserByEmail(email);
+        User user = findActiveUserById(userId);
         user.setStatus(AccountStatus.DELETED);
         userRepository.save(user);
+        refreshTokenRepository.revokeAllByUserId(user.getId());
     }
 
     // ─────────────────────────── ADDRESSES ──────────────────────────
@@ -121,7 +123,7 @@ public class UserService {
             value = "addresses",
             key = "#addressId"
     )
-    public AddressResponse getSingleAddresses(String email, Long addressId) {
+    public AddressResponse getSingleAddress(String email, Long addressId) {
         UserAddress address = addressRepository.findByIdAndUserEmail(addressId, email)
                 .orElseThrow(() -> new ResourceNotFoundException("Address not found with id: " + addressId));
         return mapToAddressResponse(address);
@@ -132,8 +134,8 @@ public class UserService {
      * If isDefault=true, all other addresses are unset as default first.
      */
     @Transactional
-    public AddressResponse addAddress(String email, AddressRequest request) {
-        User user = findActiveUserByEmail(email);
+    public AddressResponse addAddress(String email, String userId, AddressRequest request) {
+        User user = findActiveUserById(userId);
 
         // Enforce single default — clear all existing defaults first
         if (request.isDefault()) {
@@ -196,6 +198,7 @@ public class UserService {
             value = "addresses",
             key = "#addressId"
     )
+    @Transactional
     public void deleteAddress(String email, Long addressId) {
         UserAddress address = addressRepository.findByIdAndUserEmail(addressId, email)
                 .orElseThrow(() -> new ResourceNotFoundException("Address not found"));
@@ -223,9 +226,19 @@ public class UserService {
 
     // ─────────────────────────── HELPERS ────────────────────────────
 
-    private User findActiveUserByEmail(String email) {
-        return userRepository.findByEmail(email)
+    private User findActiveUserById(String userId) {
+        long id;
+        try {
+            id = Long.parseLong(userId);
+        } catch (NumberFormatException e) {
+            throw new BadRequestException("Invalid user id");
+        }
+        User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            throw new BadRequestException("User is not active for this account");
+        }
+        return user;
     }
 
     private UserProfileResponse mapToProfileResponse(User user) {

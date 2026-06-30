@@ -55,8 +55,9 @@ public class UserController {
     @PutMapping("/change-password")
     public ResponseEntity<String> changePassword(
             @RequestHeader("email") String email,
+            @RequestHeader("userId") String userId,
             @Valid @RequestBody ChangePasswordRequest request) {
-        userService.changePassword(email, request);
+        userService.changePassword(email, userId, request);
         return ResponseEntity.ok("Password changed successfully");
     }
 
@@ -92,7 +93,7 @@ public class UserController {
     public ResponseEntity<AddressResponse> getSingleAddresses(
             @RequestHeader("email") String email,
             @PathVariable Long addressId) {
-        return ResponseEntity.ok(userService.getSingleAddresses(email, addressId));
+        return ResponseEntity.ok(userService.getSingleAddress(email, addressId));
     }
 
     /**
@@ -102,9 +103,10 @@ public class UserController {
     @PostMapping("/addresses")
     public ResponseEntity<AddressResponse> addAddress(
             @RequestHeader("email") String email,
+            @RequestHeader("userId") String userId,
             @Valid @RequestBody AddressRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(userService.addAddress(email, request));
+                .body(userService.addAddress(email, userId, request));
     }
 
     /**
